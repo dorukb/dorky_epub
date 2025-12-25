@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from PyQt6.QtWidgets import (QMainWindow, QApplication, QListWidgetItem)
 from PyQt6.QtCore import Qt, QUrl, QTimer, QEvent
+from PyQt6.QtGui import QCursor
 from ebooklib import epub
 from .database import load_library, save_library, STORAGE_DIR
 from .utils import extract_images_and_fix_html, prepare_chapter_html
@@ -34,7 +35,7 @@ class ReaderWindow(QMainWindow):
         self.book = None
         self.spine_order = [] 
         self.spine_map = {} 
-        self.all_html_map = {} # New: Map of all HTML items, not just spine
+        self.all_html_map = {} 
         self.chapter_idx = 0     
         self.current_page_idx = 0  
         self.total_pages_in_chapter = 1
@@ -63,21 +64,14 @@ class ReaderWindow(QMainWindow):
         self.calculate_layout_geometry()
 
     def handle_internal_link(self, qurl):
-        """
-        Refined link handler.
-        1. Checks spine map for known chapters.
-        2. If not in spine, checks all_html_map for non-spine content.
-        """
         path = qurl.path() 
         filename = os.path.basename(path) 
         anchor = qurl.fragment()
         
         print(f"DEBUG: Link Clicked -> {filename} (Anchor: {anchor})")
         
-        # 1. Check Spine (Standard Navigation)
         if filename in self.spine_map:
             new_idx = self.spine_map[filename]
-            print(f"DEBUG: Found in spine at index {new_idx}. Jumping...")
             
             if new_idx != self.chapter_idx:
                 self.chapter_idx = new_idx
@@ -86,14 +80,8 @@ class ReaderWindow(QMainWindow):
             elif anchor:
                 self.scroll_to_anchor(anchor)
 
-        # 2. Check All Items (Fallback for non-spine content like 'rica.html')
         elif filename in self.all_html_map:
             item_id = self.all_html_map[filename]
-            print(f"DEBUG: Found in general items (ID: {item_id}). Loading non-spine content.")
-            
-            # We don't change chapter_idx because it's not in the spine.
-            # This is a "detour". Next/Prev might act weirdly (jump back to spine),
-            # but that's expected for non-linear content.
             self.load_custom_item(item_id, anchor)
             
         else:
@@ -101,7 +89,10 @@ class ReaderWindow(QMainWindow):
 
     def _apply_theme_logic(self):
         self.ui.apply_theme(self.is_dark)
-        js = "document.body.classList.add('dark-mode');" if self.is_dark else "document.body.classList.remove('dark-mode');"
+        
+        # Check if body exists before accessing classList
+        action = "add" if self.is_dark else "remove"
+        js = f"if (document && document.body) document.body.classList.{action}('dark-mode');"
         self.ui.web_view.page().runJavaScript(js)
 
     def toggle_theme(self):
@@ -116,7 +107,6 @@ class ReaderWindow(QMainWindow):
             self.book = epub.read_epub(path)
             self.spine_order = [x[0] for x in self.book.spine]
             
-            # Build Spine Map
             self.spine_map = {}
             for idx, item_id in enumerate(self.spine_order):
                 item = self.book.get_item_with_id(item_id)
@@ -124,10 +114,8 @@ class ReaderWindow(QMainWindow):
                     fname = os.path.basename(item.file_name)
                     self.spine_map[fname] = idx
 
-            # Build All HTML Map (Fallback)
             self.all_html_map = {}
             for item in self.book.get_items():
-                # Type 9 is typically XHTML/HTML documents
                 if item.get_type() == 9:
                     fname = os.path.basename(item.file_name)
                     self.all_html_map[fname] = item.get_id()
@@ -171,7 +159,6 @@ class ReaderWindow(QMainWindow):
                 list_item = QListWidgetItem(link.title)
                 list_item.setData(Qt.ItemDataRole.UserRole, spine_idx)
                 self.ui.toc_list.addItem(list_item)
-            # Logic for non-spine TOC items could go here, but usually TOC implies spine presence.
 
         if 0 <= self.chapter_idx < self.ui.toc_list.count():
             self.ui.toc_list.setCurrentRow(self.chapter_idx)
@@ -186,7 +173,6 @@ class ReaderWindow(QMainWindow):
         if not self.spine_order: return
         self.chapter_idx = max(0, min(self.chapter_idx, len(self.spine_order) - 1))
         
-        # Sync Sidebar
         for i in range(self.ui.toc_list.count()):
             if self.ui.toc_list.item(i).data(Qt.ItemDataRole.UserRole) == self.chapter_idx:
                 self.ui.toc_list.setCurrentRow(i)
@@ -196,7 +182,6 @@ class ReaderWindow(QMainWindow):
         self.load_custom_item(item_id, target_page)
 
     def load_custom_item(self, item_id, target_page=0):
-        """Loads any item by ID, handling HTML prep and WebEngine."""
         item = self.book.get_item_with_id(item_id)
         if item:
             self._pending_target_page = target_page
@@ -232,8 +217,10 @@ class ReaderWindow(QMainWindow):
     def on_chapter_loaded(self, success):
         if not success: return
         
-        if self.is_dark: self.ui.web_view.page().runJavaScript("document.body.classList.add('dark-mode');")
-        else: self.ui.web_view.page().runJavaScript("document.body.classList.remove('dark-mode');")
+        # Safe Theme Application
+        action = "add" if self.is_dark else "remove"
+        js_theme = f"if (document && document.body) document.body.classList.{action}('dark-mode');"
+        self.ui.web_view.page().runJavaScript(js_theme)
         
         js_block = """
         window.addEventListener('wheel', function(e) { if(e.ctrlKey) e.preventDefault(); }, { passive: false });
@@ -340,7 +327,23 @@ class ReaderWindow(QMainWindow):
                  if event.key() in [Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus, Qt.Key.Key_0]: return True
         
         if event.type() == QEvent.Type.Wheel and self.isActiveWindow():
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier: return True
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier: 
+                return True # Block zoom
+
+            # Check if mouse is physically over the side panel
+            if self.ui.side_panel.isVisible():
+                cursor_pos = QCursor.pos()
+                local_pos = self.ui.side_panel.mapFromGlobal(cursor_pos)
+                if self.ui.side_panel.rect().contains(local_pos):
+                    # Mouse is over sidebar, let standard processing happen (scroll the list)
+                    return super().eventFilter(source, event)
+
+            delta = event.angleDelta().y()
+            if delta > 0: # Scroll Up -> Previous Page
+                self.prev_page()
+            elif delta < 0: # Scroll Down -> Next Page
+                self.next_page()
+            return True 
             
         return super().eventFilter(source, event)
 

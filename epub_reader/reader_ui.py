@@ -7,6 +7,15 @@ from PyQt6.QtGui import QColor
 
 from .ui_components import ThemeToggleButton, BackButton
 
+# --- UI CONFIGURATION CONSTANTS ---
+SIDEBAR_WIDTH = 180
+BAR_HEIGHT = 50
+ICON_BTN_SIZE = 40
+ICON_FONT_SIZE = 20  # px
+SCROLL_WIDTH = "8px"
+SCROLL_HANDLE_MIN_H = "10px"
+SCROLL_RADIUS = "4px"
+
 class InterceptingWebPage(QWebEnginePage):
     """
     Custom WebPage to intercept navigation requests (clicks).
@@ -18,8 +27,6 @@ class InterceptingWebPage(QWebEnginePage):
     def acceptNavigationRequest(self, url, _type, isMainFrame):
         if _type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
             # CRITICAL FIX: Schedule the handler on the next event loop iteration.
-            # Processing navigation logic (which calls setHtml) synchronously inside 
-            # this callback causes crashes because the engine is still handling the click.
             QTimer.singleShot(0, lambda: self.handle_link_cb(url))
             return False 
         return True
@@ -34,19 +41,18 @@ class ReaderUI:
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
         
-        # --- SIDE PANEL (TOC) ---
+        # --- SIDE PANEL (Index) ---
         self.side_panel = QWidget()
-        self.side_panel.setFixedWidth(200)
+        self.side_panel.setFixedWidth(SIDEBAR_WIDTH)
         self.side_panel.hide() 
         
         side_layout = QVBoxLayout(self.side_panel)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(0)
         
-        # Header
-        self.toc_header = QLabel("Index")
+        self.toc_header = QLabel("Chapters")
         self.toc_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.toc_header.setFixedHeight(60)
+        self.toc_header.setFixedHeight(BAR_HEIGHT)
         side_layout.addWidget(self.toc_header)
         
         # Chapter List
@@ -64,16 +70,13 @@ class ReaderUI:
         
         self.main_layout.addWidget(self.content_container, 1)
 
-        # Top Bar
         self.top_bar = QWidget()
-        self.top_bar.setFixedHeight(60)
+        self.top_bar.setFixedHeight(BAR_HEIGHT)
         self._init_top_bar()
         self.content_layout.addWidget(self.top_bar, 0)
 
-        # Web View
         self.web_view = QWebEngineView()
         
-        # INSTALL INTERCEPTOR
         self.custom_page = InterceptingWebPage(self.web_view, self.main_window.handle_internal_link)
         self.web_view.setPage(self.custom_page)
         
@@ -81,7 +84,7 @@ class ReaderUI:
 
         # Bottom Bar
         self.nav_container = QWidget()
-        self.nav_container.setFixedHeight(60)
+        self.nav_container.setFixedHeight(BAR_HEIGHT)
         self._init_bottom_bar()
         self.content_layout.addWidget(self.nav_container, 0)
         
@@ -95,12 +98,12 @@ class ReaderUI:
         self.btn_back.clicked.connect(self.main_window.go_back_to_library)
 
         self.btn_toc = QPushButton("☰")
-        self.btn_toc.setFixedSize(40, 40)
+        self.btn_toc.setFixedSize(ICON_BTN_SIZE, ICON_BTN_SIZE)
         self.btn_toc.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_toc.clicked.connect(self.main_window.toggle_toc_panel)
-        self.btn_toc.setStyleSheet("font-size: 20px; border: none; background: transparent;")
+        self.btn_toc.setStyleSheet(f"font-size: {ICON_FONT_SIZE}px; border: none; background: transparent;")
 
-        self.btn_theme = ThemeToggleButton(False, size=40)
+        self.btn_theme = ThemeToggleButton(False, size=ICON_BTN_SIZE)
         self.btn_theme.clicked.connect(self.main_window.toggle_theme)
 
         layout.addWidget(self.btn_back)
@@ -132,25 +135,56 @@ class ReaderUI:
             bar_bg = "#252526"; bar_border = "#333"
             btn_bg = "#2d2d2d"; btn_fg = "#eee"; btn_hover = "#3e3e42"
             list_bg = "#252526"; list_sel = "#37373d"
+            scroll_handle = "#555"; scroll_hover = "#777"
             self.web_view.page().setBackgroundColor(QColor("#1e1e1e"))
         else:
             win_bg = "#fdfdfd"; win_fg = "#333"
             bar_bg = "#fff"; bar_border = "#ddd"
             btn_bg = "#fff"; btn_fg = "#333"; btn_hover = "#f5f5f5"
             list_bg = "#f9f9f9"; list_sel = "#e5e5e5"
+            scroll_handle = "#ccc"; scroll_hover = "#999"
             self.web_view.page().setBackgroundColor(QColor("#fdfdfd"))
 
         self.main_window.setStyleSheet(f"background-color: {win_bg}; color: {win_fg};")
         self.top_bar.setStyleSheet(f"background-color: {bar_bg}; border-bottom: 1px solid {bar_border};")
-        self.btn_toc.setStyleSheet(f"color: {win_fg}; font-size: 20px; border: none; background: transparent; font-weight: bold;")
+        self.btn_toc.setStyleSheet(f"color: {win_fg}; font-size: {ICON_FONT_SIZE}px; border: none; background: transparent; font-weight: bold;")
 
         self.side_panel.setStyleSheet(f"background-color: {list_bg}; border-right: 1px solid {bar_border};")
         self.toc_header.setStyleSheet(f"border-bottom: 1px solid {bar_border}; font-weight: bold; color: {win_fg};")
+        
         self.toc_list.setStyleSheet(f"""
-            QListWidget {{ background-color: {list_bg}; border: none; outline: none; }}
+            QListWidget {{ 
+                background-color: {list_bg}; 
+                border: none; 
+                outline: none; 
+            }}
             QListWidget::item {{ padding: 10px; color: {win_fg}; }}
             QListWidget::item:selected {{ background-color: {list_sel}; color: {win_fg}; }}
             QListWidget::item:hover {{ background-color: {btn_hover}; }}
+            
+            /* Modern Scrollbar */
+            QScrollBar:vertical {{
+                border: none;
+                background: {list_bg};
+                width: {SCROLL_WIDTH};
+                margin: 0px 0px 0px 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {scroll_handle};
+                min-height: {SCROLL_HANDLE_MIN_H};
+                border-radius: {SCROLL_RADIUS};
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {scroll_hover};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                border: none;
+                background: none;
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
         """)
 
         self.nav_container.setStyleSheet(f"""
