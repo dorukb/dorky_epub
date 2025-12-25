@@ -1,0 +1,16 @@
+# --- Python Internals ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Project Specific Data ---
+# 'library_storage' contains your actual books/files.
+library_storage/
+
+# library.json is your local database index, ignore it too.
+library.json
+
+# --- VS Code / IDE settings (Optional but recommended) ---
+.vscode/
+.idea/
