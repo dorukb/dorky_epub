@@ -2,9 +2,19 @@ import os
 import json
 import tempfile
 from ebooklib import epub
+import sys
+from pathlib import Path
 
-PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(PACKAGE_DIR)
+# Detect if we are running as an EXE (frozen) or script
+if getattr(sys, 'frozen', False):
+    # We are running as an EXE
+    # Save data in: C:\Users\You\Documents\DorkyReader
+    ROOT_DIR = os.path.join(Path.home(), "Documents", "DorkyReader")
+else:
+    # We are running python main.py
+    PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ROOT_DIR = os.path.dirname(PACKAGE_DIR)
+    
 STORAGE_DIR = os.path.join(ROOT_DIR, "library_storage")
 DB_FILE = os.path.join(ROOT_DIR, "library.json")
 

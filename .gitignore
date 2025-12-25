@@ -14,3 +14,7 @@ library.json
 # --- VS Code / IDE settings (Optional but recommended) ---
 .vscode/
 .idea/
+
+build/
+dist/
+*.spec

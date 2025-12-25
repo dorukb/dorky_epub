@@ -4,10 +4,12 @@ import tempfile
 from PyQt6.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, 
                              QPushButton, QLabel, QApplication)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt, QUrl, QTimer, QEvent
 from ebooklib import epub
 from .database import load_library, save_library, STORAGE_DIR
 from .utils import extract_images_and_fix_html, prepare_chapter_html
+from .ui_components import ThemeToggleButton, BackButton
 
 class ReaderWindow(QMainWindow):
     def __init__(self, book_id, book_data, on_close_callback, is_dark=False):
@@ -18,15 +20,14 @@ class ReaderWindow(QMainWindow):
         self.is_dark = is_dark
         self.is_returning_to_library = False
         
-        # SAFETY FLAG: Prevent saving 0 if closed before load finishes
+        # SAFETY FLAG
         self.is_ready_to_save = False
         
         # Window Setup
         self.setMinimumSize(900, 700) 
         self.resize(1100, 900)
         self.setWindowTitle(f"Reading: {book_data.get('title', 'Book')}")
-        self._apply_window_theme()
-
+        
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -35,7 +36,7 @@ class ReaderWindow(QMainWindow):
 
         # Top Bar
         self.top_bar = QWidget()
-        self.top_bar.setFixedHeight(50)
+        self.top_bar.setFixedHeight(60)
         self._init_top_bar_ui()
         layout.addWidget(self.top_bar, 0)
 
@@ -51,7 +52,8 @@ class ReaderWindow(QMainWindow):
         self._init_bottom_bar_ui()
         layout.addWidget(self.nav_container, 0)
 
-        self._apply_bar_visuals()
+        # --- APPLY THEME (Fixes 1 part of the flash) ---
+        self._apply_all_themes()
 
         # State
         self.book = None
@@ -62,7 +64,6 @@ class ReaderWindow(QMainWindow):
         self.scroll_stride = 0     
         self._pending_target_page = 0 
         
-        # Resize Debounce Timer
         self.resize_timer = QTimer()
         self.resize_timer.setSingleShot(True)
         self.resize_timer.setInterval(100)
@@ -77,13 +78,14 @@ class ReaderWindow(QMainWindow):
     def _init_top_bar_ui(self):
         layout = QHBoxLayout(self.top_bar)
         layout.setContentsMargins(15, 0, 15, 0)
-        self.btn_back = QPushButton("← Library")
-        self.btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.btn_back = BackButton(self.is_dark)
+        self.btn_back.setObjectName("btn_back")
         self.btn_back.clicked.connect(self.go_back_to_library)
-        self.btn_theme = QPushButton("🌙" if not self.is_dark else "☀️")
-        self.btn_theme.setFixedSize(40, 30)
-        self.btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.btn_theme = ThemeToggleButton(self.is_dark, size=40)
         self.btn_theme.clicked.connect(self.toggle_theme)
+
         layout.addWidget(self.btn_back)
         layout.addStretch()
         layout.addWidget(self.btn_theme)
@@ -103,24 +105,37 @@ class ReaderWindow(QMainWindow):
         layout.addStretch()
         layout.addWidget(self.btn_next)
 
-    def _apply_window_theme(self):
-        if self.is_dark:
-            self.setStyleSheet("background-color: #1e1e1e; color: #e0e0e0;")
-        else:
-            self.setStyleSheet("background-color: #fdfdfd; color: #333;")
+    def _apply_all_themes(self):
+        """Applies theme to Window, Bars, and the Web Engine Background"""
 
-    def _apply_bar_visuals(self):
         if self.is_dark:
-            bar_bg = "#252526"; bar_border = "#333"; btn_bg = "#2d2d2d"; btn_fg = "#eee"; btn_hover = "#3e3e42"
+            win_bg = "#1e1e1e"; win_fg = "#e0e0e0"
+            bar_bg = "#252526"; bar_border = "#333"
+            btn_bg = "#2d2d2d"; btn_fg = "#eee"; btn_hover = "#3e3e42"
+            
+            # CRITICAL FIX 1: Set WebEngine Background to Dark
+            self.web_view.page().setBackgroundColor(QColor("#1e1e1e"))
         else:
-            bar_bg = "#fff"; bar_border = "#ddd"; btn_bg = "#fff"; btn_fg = "#333"; btn_hover = "#f5f5f5"
+            win_bg = "#fdfdfd"; win_fg = "#333"
+            bar_bg = "#fff"; bar_border = "#ddd"
+            btn_bg = "#fff"; btn_fg = "#333"; btn_hover = "#f5f5f5"
+            
+            # Set WebEngine Background to Light
+            self.web_view.page().setBackgroundColor(QColor("#fdfdfd"))
+     
+        #  The buttons now handle their own internal styling (icons, text color, hover)
+        self.btn_back.refresh_style(self.is_dark)
+        self.btn_theme.refresh_icon(self.is_dark)
+        # Apply Window Style
+        self.setStyleSheet(f"background-color: {win_bg}; color: {win_fg};")
 
+        # Top Bar: ONLY style the container (QWidget). Do NOT touch QPushButtons here.
         self.top_bar.setStyleSheet(f"""
-            QWidget {{ background-color: {bar_bg}; border-bottom: 1px solid {bar_border}; }}
-            QPushButton {{ background: transparent; border: none; font-weight: bold; color: {btn_fg}; font-size: 14px; text-align: left; }}
-            QPushButton:hover {{ background-color: {btn_hover}; border-radius: 4px; }}
+            background-color: {bar_bg}; 
+            border-bottom: 1px solid {bar_border};
         """)
-        self.btn_theme.setStyleSheet(f"border: 1px solid {bar_border}; border-radius: 4px; color: {btn_fg};")
+        
+        # Bottom Bar Style
         self.nav_container.setStyleSheet(f"""
             QWidget {{ background-color: {bar_bg}; border-top: 1px solid {bar_border}; }}
             QPushButton {{ background-color: {btn_bg}; color: {btn_fg}; border: 1px solid {bar_border}; padding: 6px 20px; border-radius: 4px; font-weight: bold; }}
@@ -130,14 +145,13 @@ class ReaderWindow(QMainWindow):
 
     def toggle_theme(self):
         self.is_dark = not self.is_dark
-        self.btn_theme.setText("🌙" if not self.is_dark else "☀️")
         
         lib = load_library()
         lib['theme'] = 'dark' if self.is_dark else 'light'
         save_library(lib)
         
-        self._apply_window_theme()
-        self._apply_bar_visuals()
+        self._apply_all_themes()
+        
         js = "document.body.classList.add('dark-mode');" if self.is_dark else "document.body.classList.remove('dark-mode');"
         self.web_view.page().runJavaScript(js)
 
@@ -146,7 +160,7 @@ class ReaderWindow(QMainWindow):
             self.book = epub.read_epub(path)
             self.spine_order = [x[0] for x in self.book.spine]
             
-            # --- RESTORE CORRECTLY ---
+            # Restore
             self.chapter_idx = self.book_data.get('last_chapter_index', 0)
             saved_page = self.book_data.get('last_page_index', 0)
             
@@ -164,10 +178,18 @@ class ReaderWindow(QMainWindow):
             self._pending_target_page = target_page
             raw = item.get_content().decode('utf-8')
             html = prepare_chapter_html(raw, self.temp_dir)
+            
+            # CRITICAL FIX 2: Inject class BEFORE loading
+            # This ensures the HTML is dark the millisecond it renders.
+            if self.is_dark:
+                html = html.replace("<body>", "<body class='dark-mode'>")
+
             self.web_view.setHtml(html, QUrl.fromLocalFile(self.temp_dir + os.sep))
 
     def on_chapter_loaded(self, success):
         if not success: return
+        
+        # We still run this to be safe, though the injection above handles the initial load
         if self.is_dark: self.web_view.page().runJavaScript("document.body.classList.add('dark-mode');")
         else: self.web_view.page().runJavaScript("document.body.classList.remove('dark-mode');")
         
@@ -180,7 +202,6 @@ class ReaderWindow(QMainWindow):
         self.calculate_layout_geometry()
 
     def calculate_layout_geometry(self):
-        # FIX: Tolerance (-10) for rounding errors
         js = """(function() {
             var elem = document.getElementById('book-content');
             if (!elem) return {pages: 1, stride: 0};
@@ -209,7 +230,6 @@ class ReaderWindow(QMainWindow):
         else:
             self.current_page_idx = max(0, min(int(target), self.total_pages_in_chapter - 1))
         
-        # Safe to save now that we have restored
         self.is_ready_to_save = True
         self._pending_target_page = 'current'
         self.update_view_position()
@@ -219,7 +239,7 @@ class ReaderWindow(QMainWindow):
         self.web_view.page().runJavaScript(f"var e=document.getElementById('book-content'); if(e) e.scrollLeft={target_x};")
         self.lbl_progress.setText(f"Chap {self.chapter_idx + 1} • Page {self.current_page_idx + 1} / {self.total_pages_in_chapter}")
         
-        # NO SAVE HERE. Only update UI.
+        # No save here!
 
     def next_page(self):
         if self.current_page_idx < self.total_pages_in_chapter - 1:
@@ -279,11 +299,6 @@ class ReaderWindow(QMainWindow):
         super().resizeEvent(event)
         
     def handle_resize_finished(self):
-        # BUG FIX: Don't force 'current' here.
-        # Just ask to recalculate. If a pending restore (e.g. Page 7) 
-        # is waiting in the queue, _handle_page_count_result will use it.
-        # If no restore is waiting, it defaults to 'current' anyway (because _pending_target_page
-        # resets to 'current' after every calculation).
         self.calculate_layout_geometry()
 
     def closeEvent(self, event):
