@@ -10,6 +10,7 @@ THEME_CSS = """
     :root {
         --bg-color: #fdfdfd;
         --text-color: #2a2a2a;
+        --link-color: #0056b3;
         --img-opacity: 1.0;
     }
     
@@ -17,6 +18,7 @@ THEME_CSS = """
     body.dark-mode {
         --bg-color: #1a1a1a;
         --text-color: #e0e0e0;
+        --link-color: #64b5f6;
         --img-opacity: 0.85; /* Slightly dim images in dark mode */
     }
 
@@ -71,6 +73,11 @@ THEME_CSS = """
         margin: 20px auto;
         break-inside: avoid;
         opacity: var(--img-opacity);
+    }
+    
+    a {
+        color: var(--link-color);
+        text-decoration: none;
     }
 </style>
 """

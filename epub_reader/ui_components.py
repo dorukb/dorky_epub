@@ -53,7 +53,7 @@ class ThemeToggleButton(QPushButton):
 
 class BackButton(QPushButton):
     def __init__(self, is_dark=False, parent=None):
-        super().__init__(" Library", parent) 
+        super().__init__("", parent) 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setIconSize(QSize(24, 24))
         self.refresh_style(is_dark)

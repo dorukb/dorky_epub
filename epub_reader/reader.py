@@ -1,15 +1,12 @@
 import os
 import shutil
 import tempfile
-from PyQt6.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, 
-                             QPushButton, QLabel, QApplication)
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (QMainWindow, QApplication, QListWidgetItem)
 from PyQt6.QtCore import Qt, QUrl, QTimer, QEvent
 from ebooklib import epub
 from .database import load_library, save_library, STORAGE_DIR
 from .utils import extract_images_and_fix_html, prepare_chapter_html
-from .ui_components import ThemeToggleButton, BackButton
+from .reader_ui import ReaderUI
 
 class ReaderWindow(QMainWindow):
     def __init__(self, book_id, book_data, on_close_callback, is_dark=False):
@@ -19,45 +16,25 @@ class ReaderWindow(QMainWindow):
         self.on_close_callback = on_close_callback
         self.is_dark = is_dark
         self.is_returning_to_library = False
-        
-        # SAFETY FLAG
         self.is_ready_to_save = False
         
-        # Window Setup
-        self.setMinimumSize(900, 700) 
-        self.resize(1100, 900)
+        self.setMinimumSize(1200, 900) 
         self.setWindowTitle(f"Reading: {book_data.get('title', 'Book')}")
         
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Top Bar
-        self.top_bar = QWidget()
-        self.top_bar.setFixedHeight(60)
-        self._init_top_bar_ui()
-        layout.addWidget(self.top_bar, 0)
-
-        # Web View
-        self.web_view = QWebEngineView()
-        self.web_view.loadFinished.connect(self.on_chapter_loaded)
+        self.ui = ReaderUI(self)
+        
+        self.ui.web_view.loadFinished.connect(self.on_chapter_loaded)
+        self.ui.toc_list.itemClicked.connect(self.on_toc_chapter_clicked)
+        
         QApplication.instance().installEventFilter(self)
-        layout.addWidget(self.web_view, 1)
+        self.ui.web_view.installEventFilter(self)
 
-        # Bottom Bar
-        self.nav_container = QWidget()
-        self.nav_container.setFixedHeight(60)
-        self._init_bottom_bar_ui()
-        layout.addWidget(self.nav_container, 0)
+        self._apply_theme_logic()
 
-        # --- APPLY THEME (Fixes 1 part of the flash) ---
-        self._apply_all_themes()
-
-        # State
         self.book = None
-        self.spine_order = []
+        self.spine_order = [] 
+        self.spine_map = {} 
+        self.all_html_map = {} # New: Map of all HTML items, not just spine
         self.chapter_idx = 0     
         self.current_page_idx = 0  
         self.total_pages_in_chapter = 1
@@ -66,7 +43,7 @@ class ReaderWindow(QMainWindow):
         
         self.resize_timer = QTimer()
         self.resize_timer.setSingleShot(True)
-        self.resize_timer.setInterval(100)
+        self.resize_timer.setInterval(150)
         self.resize_timer.timeout.connect(self.handle_resize_finished)
 
         self.temp_dir = os.path.join(tempfile.gettempdir(), "epub_reader", book_id)
@@ -75,130 +52,195 @@ class ReaderWindow(QMainWindow):
         
         self.load_book(full_path)
 
-    def _init_top_bar_ui(self):
-        layout = QHBoxLayout(self.top_bar)
-        layout.setContentsMargins(15, 0, 15, 0)
-
-        self.btn_back = BackButton(self.is_dark)
-        self.btn_back.setObjectName("btn_back")
-        self.btn_back.clicked.connect(self.go_back_to_library)
-
-        self.btn_theme = ThemeToggleButton(self.is_dark, size=40)
-        self.btn_theme.clicked.connect(self.toggle_theme)
-
-        layout.addWidget(self.btn_back)
-        layout.addStretch()
-        layout.addWidget(self.btn_theme)
-
-    def _init_bottom_bar_ui(self):
-        layout = QHBoxLayout(self.nav_container)
-        layout.setContentsMargins(20, 0, 20, 0)
-        self.btn_prev = QPushButton("Previous")
-        self.btn_prev.clicked.connect(self.prev_page)
-        self.lbl_progress = QLabel("Loading...")
-        self.lbl_progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.btn_next = QPushButton("Next")
-        self.btn_next.clicked.connect(self.next_page)
-        layout.addWidget(self.btn_prev)
-        layout.addStretch()
-        layout.addWidget(self.lbl_progress)
-        layout.addStretch()
-        layout.addWidget(self.btn_next)
-
-    def _apply_all_themes(self):
-        """Applies theme to Window, Bars, and the Web Engine Background"""
-
-        if self.is_dark:
-            win_bg = "#1e1e1e"; win_fg = "#e0e0e0"
-            bar_bg = "#252526"; bar_border = "#333"
-            btn_bg = "#2d2d2d"; btn_fg = "#eee"; btn_hover = "#3e3e42"
-            
-            # CRITICAL FIX 1: Set WebEngine Background to Dark
-            self.web_view.page().setBackgroundColor(QColor("#1e1e1e"))
+    def toggle_toc_panel(self):
+        if self.ui.side_panel.isVisible():
+            self.ui.side_panel.hide()
         else:
-            win_bg = "#fdfdfd"; win_fg = "#333"
-            bar_bg = "#fff"; bar_border = "#ddd"
-            btn_bg = "#fff"; btn_fg = "#333"; btn_hover = "#f5f5f5"
-            
-            # Set WebEngine Background to Light
-            self.web_view.page().setBackgroundColor(QColor("#fdfdfd"))
-     
-        #  The buttons now handle their own internal styling (icons, text color, hover)
-        self.btn_back.refresh_style(self.is_dark)
-        self.btn_theme.refresh_icon(self.is_dark)
-        # Apply Window Style
-        self.setStyleSheet(f"background-color: {win_bg}; color: {win_fg};")
+            self.ui.side_panel.show()
+        self.resize_timer.start()
 
-        # Top Bar: ONLY style the container (QWidget). Do NOT touch QPushButtons here.
-        self.top_bar.setStyleSheet(f"""
-            background-color: {bar_bg}; 
-            border-bottom: 1px solid {bar_border};
-        """)
+    def handle_resize_finished(self):
+        self.calculate_layout_geometry()
+
+    def handle_internal_link(self, qurl):
+        """
+        Refined link handler.
+        1. Checks spine map for known chapters.
+        2. If not in spine, checks all_html_map for non-spine content.
+        """
+        path = qurl.path() 
+        filename = os.path.basename(path) 
+        anchor = qurl.fragment()
         
-        # Bottom Bar Style
-        self.nav_container.setStyleSheet(f"""
-            QWidget {{ background-color: {bar_bg}; border-top: 1px solid {bar_border}; }}
-            QPushButton {{ background-color: {btn_bg}; color: {btn_fg}; border: 1px solid {bar_border}; padding: 6px 20px; border-radius: 4px; font-weight: bold; }}
-            QPushButton:hover {{ background-color: {btn_hover}; }}
-            QLabel {{ font-size: 14px; color: {btn_fg}; }}
-        """)
+        print(f"DEBUG: Link Clicked -> {filename} (Anchor: {anchor})")
+        
+        # 1. Check Spine (Standard Navigation)
+        if filename in self.spine_map:
+            new_idx = self.spine_map[filename]
+            print(f"DEBUG: Found in spine at index {new_idx}. Jumping...")
+            
+            if new_idx != self.chapter_idx:
+                self.chapter_idx = new_idx
+                target = f"#{anchor}" if anchor else 0
+                self.load_chapter_content(target_page=target)
+            elif anchor:
+                self.scroll_to_anchor(anchor)
+
+        # 2. Check All Items (Fallback for non-spine content like 'rica.html')
+        elif filename in self.all_html_map:
+            item_id = self.all_html_map[filename]
+            print(f"DEBUG: Found in general items (ID: {item_id}). Loading non-spine content.")
+            
+            # We don't change chapter_idx because it's not in the spine.
+            # This is a "detour". Next/Prev might act weirdly (jump back to spine),
+            # but that's expected for non-linear content.
+            self.load_custom_item(item_id, anchor)
+            
+        else:
+            print(f"DEBUG: Filename '{filename}' NOT found in spine or item maps.")
+
+    def _apply_theme_logic(self):
+        self.ui.apply_theme(self.is_dark)
+        js = "document.body.classList.add('dark-mode');" if self.is_dark else "document.body.classList.remove('dark-mode');"
+        self.ui.web_view.page().runJavaScript(js)
 
     def toggle_theme(self):
         self.is_dark = not self.is_dark
-        
         lib = load_library()
         lib['theme'] = 'dark' if self.is_dark else 'light'
         save_library(lib)
-        
-        self._apply_all_themes()
-        
-        js = "document.body.classList.add('dark-mode');" if self.is_dark else "document.body.classList.remove('dark-mode');"
-        self.web_view.page().runJavaScript(js)
+        self._apply_theme_logic()
 
     def load_book(self, path):
         try:
             self.book = epub.read_epub(path)
             self.spine_order = [x[0] for x in self.book.spine]
             
-            # Restore
+            # Build Spine Map
+            self.spine_map = {}
+            for idx, item_id in enumerate(self.spine_order):
+                item = self.book.get_item_with_id(item_id)
+                if item:
+                    fname = os.path.basename(item.file_name)
+                    self.spine_map[fname] = idx
+
+            # Build All HTML Map (Fallback)
+            self.all_html_map = {}
+            for item in self.book.get_items():
+                # Type 9 is typically XHTML/HTML documents
+                if item.get_type() == 9:
+                    fname = os.path.basename(item.file_name)
+                    self.all_html_map[fname] = item.get_id()
+
             self.chapter_idx = self.book_data.get('last_chapter_index', 0)
             saved_page = self.book_data.get('last_page_index', 0)
             
             extract_images_and_fix_html(self.book, self.temp_dir)
+            self.populate_toc() 
             self.load_chapter_content(target_page=saved_page)
             
         except Exception as e:
             print(f"Error loading book: {e}")
 
+    def populate_toc(self):
+        self.ui.toc_list.clear()
+        
+        def flatten_toc(toc_list):
+            items = []
+            for item in toc_list:
+                if isinstance(item, (list, tuple)):
+                    items.extend(flatten_toc(item))
+                elif hasattr(item, 'href') and hasattr(item, 'title'):
+                    items.append(item)
+            return items
+
+        flat_toc = flatten_toc(self.book.toc)
+
+        if not flat_toc:
+            for i in range(len(self.spine_order)):
+                self.ui.toc_list.addItem(QListWidgetItem(f"Chapter {i+1}"))
+                self.ui.toc_list.item(i).setData(Qt.ItemDataRole.UserRole, i)
+            return
+
+        for link in flat_toc:
+            href_clean = link.href.split('#')[0]
+            fname = os.path.basename(href_clean)
+            
+            if fname in self.spine_map:
+                spine_idx = self.spine_map[fname]
+                list_item = QListWidgetItem(link.title)
+                list_item.setData(Qt.ItemDataRole.UserRole, spine_idx)
+                self.ui.toc_list.addItem(list_item)
+            # Logic for non-spine TOC items could go here, but usually TOC implies spine presence.
+
+        if 0 <= self.chapter_idx < self.ui.toc_list.count():
+            self.ui.toc_list.setCurrentRow(self.chapter_idx)
+
+    def on_toc_chapter_clicked(self, item):
+        target_idx = item.data(Qt.ItemDataRole.UserRole)
+        if target_idx is not None and target_idx != self.chapter_idx:
+            self.chapter_idx = target_idx
+            self.load_chapter_content(target_page=0)
+
     def load_chapter_content(self, target_page=0):
         if not self.spine_order: return
         self.chapter_idx = max(0, min(self.chapter_idx, len(self.spine_order) - 1))
-        item = self.book.get_item_with_id(self.spine_order[self.chapter_idx])
+        
+        # Sync Sidebar
+        for i in range(self.ui.toc_list.count()):
+            if self.ui.toc_list.item(i).data(Qt.ItemDataRole.UserRole) == self.chapter_idx:
+                self.ui.toc_list.setCurrentRow(i)
+                break
+
+        item_id = self.spine_order[self.chapter_idx]
+        self.load_custom_item(item_id, target_page)
+
+    def load_custom_item(self, item_id, target_page=0):
+        """Loads any item by ID, handling HTML prep and WebEngine."""
+        item = self.book.get_item_with_id(item_id)
         if item:
             self._pending_target_page = target_page
             raw = item.get_content().decode('utf-8')
             html = prepare_chapter_html(raw, self.temp_dir)
             
-            # CRITICAL FIX 2: Inject class BEFORE loading
-            # This ensures the HTML is dark the millisecond it renders.
             if self.is_dark:
                 html = html.replace("<body>", "<body class='dark-mode'>")
 
-            self.web_view.setHtml(html, QUrl.fromLocalFile(self.temp_dir + os.sep))
+            self.ui.web_view.setHtml(html, QUrl.fromLocalFile(self.temp_dir + os.sep))
+
+    def scroll_to_anchor(self, anchor_id):
+        js = f"""
+        (function() {{
+            var el = document.getElementById('{anchor_id}');
+            if (el) {{
+                var rect = el.getBoundingClientRect();
+                var container = document.getElementById('book-content');
+                var totalLeft = container.scrollLeft + rect.left;
+                return totalLeft;
+            }}
+            return -1;
+        }})();
+        """
+        self.ui.web_view.page().runJavaScript(js, self._handle_anchor_result)
+
+    def _handle_anchor_result(self, result):
+        if result != -1 and self.scroll_stride > 0:
+            page_idx = int(result / self.scroll_stride)
+            self.current_page_idx = max(0, min(page_idx, self.total_pages_in_chapter - 1))
+            self.update_view_position()
 
     def on_chapter_loaded(self, success):
         if not success: return
         
-        # We still run this to be safe, though the injection above handles the initial load
-        if self.is_dark: self.web_view.page().runJavaScript("document.body.classList.add('dark-mode');")
-        else: self.web_view.page().runJavaScript("document.body.classList.remove('dark-mode');")
+        if self.is_dark: self.ui.web_view.page().runJavaScript("document.body.classList.add('dark-mode');")
+        else: self.ui.web_view.page().runJavaScript("document.body.classList.remove('dark-mode');")
         
         js_block = """
         window.addEventListener('wheel', function(e) { if(e.ctrlKey) e.preventDefault(); }, { passive: false });
         window.addEventListener('keydown', function(e) { if (e.ctrlKey && ['+', '-', '=', '0'].includes(e.key)) e.preventDefault(); });
         """
-        self.web_view.page().runJavaScript(js_block)
-        self.web_view.setZoomFactor(1.0)
+        self.ui.web_view.page().runJavaScript(js_block)
+        self.ui.web_view.setZoomFactor(1.0)
         self.calculate_layout_geometry()
 
     def calculate_layout_geometry(self):
@@ -212,7 +254,7 @@ class ReaderWindow(QMainWindow):
             var pages = Math.ceil((totalW - 10) / stride);
             return { pages: pages, stride: stride };
         })();"""
-        self.web_view.page().runJavaScript(js, self._handle_page_count_result)
+        self.ui.web_view.page().runJavaScript(js, self._handle_page_count_result)
 
     def _handle_page_count_result(self, result):
         if isinstance(result, dict):
@@ -220,10 +262,17 @@ class ReaderWindow(QMainWindow):
             self.scroll_stride = float(result.get('stride', 0))
         else:
             self.total_pages_in_chapter = 1
-            self.scroll_stride = float(self.web_view.width())
+            self.scroll_stride = float(self.ui.web_view.width())
         
         target = self._pending_target_page
-        if target == 'end':
+        
+        if isinstance(target, str) and target.startswith("#"):
+            self.is_ready_to_save = True
+            self.scroll_to_anchor(target[1:]) 
+            self._pending_target_page = 'current'
+            return
+            
+        elif target == 'end':
             self.current_page_idx = max(0, self.total_pages_in_chapter - 1)
         elif target == 'current':
             self.current_page_idx = max(0, min(self.current_page_idx, self.total_pages_in_chapter - 1))
@@ -236,10 +285,8 @@ class ReaderWindow(QMainWindow):
 
     def update_view_position(self):
         target_x = round(self.current_page_idx * self.scroll_stride)
-        self.web_view.page().runJavaScript(f"var e=document.getElementById('book-content'); if(e) e.scrollLeft={target_x};")
-        self.lbl_progress.setText(f"Chap {self.chapter_idx + 1} • Page {self.current_page_idx + 1} / {self.total_pages_in_chapter}")
-        
-        # No save here!
+        self.ui.web_view.page().runJavaScript(f"var e=document.getElementById('book-content'); if(e) e.scrollLeft={target_x};")
+        self.ui.lbl_progress.setText(f"Chap {self.chapter_idx + 1} • Page {self.current_page_idx + 1} / {self.total_pages_in_chapter}")
 
     def next_page(self):
         if self.current_page_idx < self.total_pages_in_chapter - 1:
@@ -258,13 +305,11 @@ class ReaderWindow(QMainWindow):
             self.load_chapter_content(target_page='end')
 
     def save_progress(self):
-        """Called ONLY when closing the window/app."""
         if not self.is_ready_to_save: return
 
         lib = load_library()
         if 'books' in lib and self.book_id in lib['books']:
             book_entry = lib['books'][self.book_id]
-            
             book_entry['last_chapter_index'] = self.chapter_idx
             book_entry['last_page_index'] = self.current_page_idx
             
@@ -283,6 +328,9 @@ class ReaderWindow(QMainWindow):
         self.close()
 
     def eventFilter(self, source, event):
+        if source == self.ui.web_view and event.type() == QEvent.Type.Resize:
+            self.resize_timer.start()
+
         if event.type() == QEvent.Type.KeyPress and self.isActiveWindow():
             if event.key() == Qt.Key.Key_Left or event.key() == Qt.Key.Key_J:
                 self.prev_page(); return True
@@ -290,20 +338,20 @@ class ReaderWindow(QMainWindow):
                 self.next_page(); return True
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                  if event.key() in [Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus, Qt.Key.Key_0]: return True
+        
         if event.type() == QEvent.Type.Wheel and self.isActiveWindow():
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier: return True
+            
         return super().eventFilter(source, event)
 
     def resizeEvent(self, event):
         self.resize_timer.start()
         super().resizeEvent(event)
-        
-    def handle_resize_finished(self):
-        self.calculate_layout_geometry()
 
     def closeEvent(self, event):
         self.save_progress()
         QApplication.instance().removeEventFilter(self)
+        self.ui.web_view.removeEventFilter(self)
         if os.path.exists(self.temp_dir):
             try: shutil.rmtree(self.temp_dir)
             except: pass 

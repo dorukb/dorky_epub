@@ -14,7 +14,7 @@ from .ui_components import ThemeToggleButton, ImportButton
 class LibraryWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Library")
+        self.setWindowTitle("Dorky Reader")
         self.resize(800, 600)
         
         self.lib_data = load_library()
