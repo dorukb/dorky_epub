@@ -1,30 +1,39 @@
 import os
 import json
-import shutil
+import tempfile
 from ebooklib import epub
 
-# Paths
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(PACKAGE_DIR)
 STORAGE_DIR = os.path.join(ROOT_DIR, "library_storage")
 DB_FILE = os.path.join(ROOT_DIR, "library.json")
 
-# Ensure storage exists
 if not os.path.exists(STORAGE_DIR):
     os.makedirs(STORAGE_DIR)
 
 def load_library():
     if not os.path.exists(DB_FILE):
-        return {}
+        return {'books': {}, 'theme': 'dark'} # Default structure
     try:
         with open(DB_FILE, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            return data
     except:
-        return {}
+        return {'books': {}, 'theme': 'dark'}
 
 def save_library(data):
-    with open(DB_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+    dirpath = os.path.dirname(DB_FILE) or "."
+    fd, tmp = tempfile.mkstemp(prefix="library-", dir=dirpath, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, DB_FILE)
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except: pass
 
 def get_epub_meta(path):
     try:
@@ -36,7 +45,6 @@ def get_epub_meta(path):
         return os.path.basename(path)
 
 def delete_book_files(filename):
-    """Removes the EPUB file from storage"""
     path = os.path.join(STORAGE_DIR, filename)
     if os.path.exists(path):
         os.remove(path)

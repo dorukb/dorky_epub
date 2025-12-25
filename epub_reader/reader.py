@@ -10,95 +10,50 @@ from .database import load_library, save_library, STORAGE_DIR
 from .utils import extract_images_and_fix_html, prepare_chapter_html
 
 class ReaderWindow(QMainWindow):
-    def __init__(self, book_id, book_data, on_close_callback):
+    def __init__(self, book_id, book_data, on_close_callback, is_dark=False):
         super().__init__()
         self.book_id = book_id
         self.book_data = book_data
         self.on_close_callback = on_close_callback
-        
-        # FLAG: Distinguish between "Back to Lib" and "Quit App"
+        self.is_dark = is_dark
         self.is_returning_to_library = False
         
+        # SAFETY FLAG: Prevent saving 0 if closed before load finishes
+        self.is_ready_to_save = False
+        
+        # Window Setup
         self.setMinimumSize(900, 700) 
         self.resize(1100, 900)
-        self.setWindowTitle(f"Reading: {book_data['title']}")
+        self.setWindowTitle(f"Reading: {book_data.get('title', 'Book')}")
+        self._apply_window_theme()
 
         central = QWidget()
         self.setCentralWidget(central)
-        
-        # MAIN LAYOUT (Vertical)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # --- 1. TOP BAR (Library Button) ---
-        top_bar = QWidget()
-        top_bar.setFixedHeight(50)
-        top_bar.setStyleSheet("""
-            QWidget { background-color: #fff; border-bottom: 1px solid #eee; }
-            QPushButton {
-                border: none; color: #555; font-weight: bold; font-size: 14px;
-                padding: 5px 15px; text-align: left;
-            }
-            QPushButton:hover { color: #000; background-color: #f5f5f5; border-radius: 4px; }
-        """)
-        
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(10, 0, 10, 0)
-        
-        self.btn_back = QPushButton("← Back")
-        self.btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_back.clicked.connect(self.go_back_to_library)
-        
-        top_layout.addWidget(self.btn_back)
-        top_layout.addStretch() # Push button to the left
-        
-        layout.addWidget(top_bar, 0)
+        # Top Bar
+        self.top_bar = QWidget()
+        self.top_bar.setFixedHeight(50)
+        self._init_top_bar_ui()
+        layout.addWidget(self.top_bar, 0)
 
-        # --- 2. WEB VIEW (Middle) ---
+        # Web View
         self.web_view = QWebEngineView()
-        self.web_view.setZoomFactor(1.0)
         self.web_view.loadFinished.connect(self.on_chapter_loaded)
-        
-        # Nuclear Option: Global Event Filter
         QApplication.instance().installEventFilter(self)
-        
         layout.addWidget(self.web_view, 1)
 
-        # --- 3. BOTTOM BAR (Navigation) ---
-        nav_container = QWidget()
-        nav_container.setFixedHeight(60)
-        nav_container.setStyleSheet("""
-            QWidget { background-color: #fff; border-top: 1px solid #ddd; }
-            QPushButton {
-                background-color: #fff; color: #333; border: 1px solid #ccc;
-                padding: 6px 20px; border-radius: 4px; font-weight: bold;
-            }
-            QPushButton:hover { background-color: #f5f5f5; }
-            QLabel { font-size: 14px; color: #666; }
-        """)
-        
-        nav_layout = QHBoxLayout(nav_container)
-        nav_layout.setContentsMargins(20, 0, 20, 0)
-        
-        self.btn_prev = QPushButton("Previous")
-        self.btn_prev.clicked.connect(self.prev_page)
-        
-        self.lbl_progress = QLabel("Loading...")
-        self.lbl_progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        self.btn_next = QPushButton("Next")
-        self.btn_next.clicked.connect(self.next_page)
+        # Bottom Bar
+        self.nav_container = QWidget()
+        self.nav_container.setFixedHeight(60)
+        self._init_bottom_bar_ui()
+        layout.addWidget(self.nav_container, 0)
 
-        nav_layout.addWidget(self.btn_prev)
-        nav_layout.addStretch()
-        nav_layout.addWidget(self.lbl_progress)
-        nav_layout.addStretch()
-        nav_layout.addWidget(self.btn_next)
-        
-        layout.addWidget(nav_container, 0)
+        self._apply_bar_visuals()
 
-        # --- STATE ---
+        # State
         self.book = None
         self.spine_order = []
         self.chapter_idx = 0     
@@ -107,23 +62,97 @@ class ReaderWindow(QMainWindow):
         self.scroll_stride = 0     
         self._pending_target_page = 0 
         
+        # Resize Debounce Timer
         self.resize_timer = QTimer()
         self.resize_timer.setSingleShot(True)
         self.resize_timer.setInterval(100)
         self.resize_timer.timeout.connect(self.handle_resize_finished)
 
         self.temp_dir = os.path.join(tempfile.gettempdir(), "epub_reader", book_id)
-        full_path = os.path.join(STORAGE_DIR, book_data['filename'])
+        fname = book_data.get('filename', book_id)
+        full_path = os.path.join(STORAGE_DIR, fname)
+        
         self.load_book(full_path)
+
+    def _init_top_bar_ui(self):
+        layout = QHBoxLayout(self.top_bar)
+        layout.setContentsMargins(15, 0, 15, 0)
+        self.btn_back = QPushButton("← Library")
+        self.btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_back.clicked.connect(self.go_back_to_library)
+        self.btn_theme = QPushButton("🌙" if not self.is_dark else "☀️")
+        self.btn_theme.setFixedSize(40, 30)
+        self.btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_theme.clicked.connect(self.toggle_theme)
+        layout.addWidget(self.btn_back)
+        layout.addStretch()
+        layout.addWidget(self.btn_theme)
+
+    def _init_bottom_bar_ui(self):
+        layout = QHBoxLayout(self.nav_container)
+        layout.setContentsMargins(20, 0, 20, 0)
+        self.btn_prev = QPushButton("Previous")
+        self.btn_prev.clicked.connect(self.prev_page)
+        self.lbl_progress = QLabel("Loading...")
+        self.lbl_progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.btn_next = QPushButton("Next")
+        self.btn_next.clicked.connect(self.next_page)
+        layout.addWidget(self.btn_prev)
+        layout.addStretch()
+        layout.addWidget(self.lbl_progress)
+        layout.addStretch()
+        layout.addWidget(self.btn_next)
+
+    def _apply_window_theme(self):
+        if self.is_dark:
+            self.setStyleSheet("background-color: #1e1e1e; color: #e0e0e0;")
+        else:
+            self.setStyleSheet("background-color: #fdfdfd; color: #333;")
+
+    def _apply_bar_visuals(self):
+        if self.is_dark:
+            bar_bg = "#252526"; bar_border = "#333"; btn_bg = "#2d2d2d"; btn_fg = "#eee"; btn_hover = "#3e3e42"
+        else:
+            bar_bg = "#fff"; bar_border = "#ddd"; btn_bg = "#fff"; btn_fg = "#333"; btn_hover = "#f5f5f5"
+
+        self.top_bar.setStyleSheet(f"""
+            QWidget {{ background-color: {bar_bg}; border-bottom: 1px solid {bar_border}; }}
+            QPushButton {{ background: transparent; border: none; font-weight: bold; color: {btn_fg}; font-size: 14px; text-align: left; }}
+            QPushButton:hover {{ background-color: {btn_hover}; border-radius: 4px; }}
+        """)
+        self.btn_theme.setStyleSheet(f"border: 1px solid {bar_border}; border-radius: 4px; color: {btn_fg};")
+        self.nav_container.setStyleSheet(f"""
+            QWidget {{ background-color: {bar_bg}; border-top: 1px solid {bar_border}; }}
+            QPushButton {{ background-color: {btn_bg}; color: {btn_fg}; border: 1px solid {bar_border}; padding: 6px 20px; border-radius: 4px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: {btn_hover}; }}
+            QLabel {{ font-size: 14px; color: {btn_fg}; }}
+        """)
+
+    def toggle_theme(self):
+        self.is_dark = not self.is_dark
+        self.btn_theme.setText("🌙" if not self.is_dark else "☀️")
+        
+        lib = load_library()
+        lib['theme'] = 'dark' if self.is_dark else 'light'
+        save_library(lib)
+        
+        self._apply_window_theme()
+        self._apply_bar_visuals()
+        js = "document.body.classList.add('dark-mode');" if self.is_dark else "document.body.classList.remove('dark-mode');"
+        self.web_view.page().runJavaScript(js)
 
     def load_book(self, path):
         try:
             self.book = epub.read_epub(path)
             self.spine_order = [x[0] for x in self.book.spine]
+            
+            # --- RESTORE CORRECTLY ---
             self.chapter_idx = self.book_data.get('last_chapter_index', 0)
             saved_page = self.book_data.get('last_page_index', 0)
+            
             extract_images_and_fix_html(self.book, self.temp_dir)
             self.load_chapter_content(target_page=saved_page)
+            
         except Exception as e:
             print(f"Error loading book: {e}")
 
@@ -139,6 +168,9 @@ class ReaderWindow(QMainWindow):
 
     def on_chapter_loaded(self, success):
         if not success: return
+        if self.is_dark: self.web_view.page().runJavaScript("document.body.classList.add('dark-mode');")
+        else: self.web_view.page().runJavaScript("document.body.classList.remove('dark-mode');")
+        
         js_block = """
         window.addEventListener('wheel', function(e) { if(e.ctrlKey) e.preventDefault(); }, { passive: false });
         window.addEventListener('keydown', function(e) { if (e.ctrlKey && ['+', '-', '=', '0'].includes(e.key)) e.preventDefault(); });
@@ -148,6 +180,7 @@ class ReaderWindow(QMainWindow):
         self.calculate_layout_geometry()
 
     def calculate_layout_geometry(self):
+        # FIX: Tolerance (-10) for rounding errors
         js = """(function() {
             var elem = document.getElementById('book-content');
             if (!elem) return {pages: 1, stride: 0};
@@ -155,7 +188,8 @@ class ReaderWindow(QMainWindow):
             var winW = window.innerWidth;
             var gap = parseFloat(window.getComputedStyle(elem).columnGap) || 0;
             var stride = winW + gap; if (stride < 100) stride = winW;
-            return { pages: Math.ceil(totalW / stride), stride: stride };
+            var pages = Math.ceil((totalW - 10) / stride);
+            return { pages: pages, stride: stride };
         })();"""
         self.web_view.page().runJavaScript(js, self._handle_page_count_result)
 
@@ -168,17 +202,24 @@ class ReaderWindow(QMainWindow):
             self.scroll_stride = float(self.web_view.width())
         
         target = self._pending_target_page
-        if target == 'end': self.current_page_idx = max(0, self.total_pages_in_chapter - 1)
-        elif target == 'current': self.current_page_idx = max(0, min(self.current_page_idx, self.total_pages_in_chapter - 1))
-        else: self.current_page_idx = max(0, min(int(target), self.total_pages_in_chapter - 1))
+        if target == 'end':
+            self.current_page_idx = max(0, self.total_pages_in_chapter - 1)
+        elif target == 'current':
+            self.current_page_idx = max(0, min(self.current_page_idx, self.total_pages_in_chapter - 1))
+        else:
+            self.current_page_idx = max(0, min(int(target), self.total_pages_in_chapter - 1))
+        
+        # Safe to save now that we have restored
+        self.is_ready_to_save = True
         self._pending_target_page = 'current'
         self.update_view_position()
 
     def update_view_position(self):
-        target_x = self.current_page_idx * self.scroll_stride
+        target_x = round(self.current_page_idx * self.scroll_stride)
         self.web_view.page().runJavaScript(f"var e=document.getElementById('book-content'); if(e) e.scrollLeft={target_x};")
         self.lbl_progress.setText(f"Chap {self.chapter_idx + 1} • Page {self.current_page_idx + 1} / {self.total_pages_in_chapter}")
-        self.save_progress()
+        
+        # NO SAVE HERE. Only update UI.
 
     def next_page(self):
         if self.current_page_idx < self.total_pages_in_chapter - 1:
@@ -197,26 +238,40 @@ class ReaderWindow(QMainWindow):
             self.load_chapter_content(target_page='end')
 
     def save_progress(self):
+        """Called ONLY when closing the window/app."""
+        if not self.is_ready_to_save: return
+
         lib = load_library()
-        if self.book_id in lib:
-            lib[self.book_id]['last_chapter_index'] = self.chapter_idx
-            lib[self.book_id]['last_page_index'] = self.current_page_idx
+        if 'books' in lib and self.book_id in lib['books']:
+            book_entry = lib['books'][self.book_id]
+            
+            book_entry['last_chapter_index'] = self.chapter_idx
+            book_entry['last_page_index'] = self.current_page_idx
+            
+            total_chapters = len(self.spine_order)
+            if total_chapters > 0:
+                cur_chap = self.chapter_idx / total_chapters
+                weight = 1 / total_chapters
+                pg_frac = self.current_page_idx / max(1, self.total_pages_in_chapter)
+                total_percent = int((cur_chap + (pg_frac * weight)) * 100)
+                book_entry['progress_percent'] = min(100, max(0, total_percent))
+            
             save_library(lib)
+
+    def go_back_to_library(self):
+        self.is_returning_to_library = True
+        self.close()
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.Type.KeyPress and self.isActiveWindow():
             if event.key() == Qt.Key.Key_Left or event.key() == Qt.Key.Key_J:
-                self.prev_page()
-                return True
+                self.prev_page(); return True
             if event.key() == Qt.Key.Key_Right or event.key() == Qt.Key.Key_L:
-                self.next_page()
-                return True
+                self.next_page(); return True
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                 if event.key() in [Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus, Qt.Key.Key_0]:
-                    return True
+                 if event.key() in [Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus, Qt.Key.Key_0]: return True
         if event.type() == QEvent.Type.Wheel and self.isActiveWindow():
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                return True
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier: return True
         return super().eventFilter(source, event)
 
     def resizeEvent(self, event):
@@ -224,26 +279,22 @@ class ReaderWindow(QMainWindow):
         super().resizeEvent(event)
         
     def handle_resize_finished(self):
-        self._pending_target_page = 'current'
+        # BUG FIX: Don't force 'current' here.
+        # Just ask to recalculate. If a pending restore (e.g. Page 7) 
+        # is waiting in the queue, _handle_page_count_result will use it.
+        # If no restore is waiting, it defaults to 'current' anyway (because _pending_target_page
+        # resets to 'current' after every calculation).
         self.calculate_layout_geometry()
 
-    
-    def go_back_to_library(self):
-        """User explicitly clicked Back. We want to show the library."""
-        self.is_returning_to_library = True
-        self.close()
-
     def closeEvent(self, event):
+        self.save_progress()
         QApplication.instance().removeEventFilter(self)
         if os.path.exists(self.temp_dir):
             try: shutil.rmtree(self.temp_dir)
             except: pass 
-        
+            
         if self.is_returning_to_library:
             self.on_close_callback()
         else:
-            # User clicked "X" or Alt+F4 -> Kill the whole app
-            # (Because the library is currently just hidden, we must force quit)
             QApplication.instance().quit()
-            
         event.accept()

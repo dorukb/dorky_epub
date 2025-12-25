@@ -3,77 +3,74 @@ import copy
 from bs4 import BeautifulSoup
 from PyQt6.QtCore import QUrl
 
-PAGED_CSS = """
+# --- THEME CSS ---
+# We use CSS variables so we can switch themes instantly
+THEME_CSS = """
 <style>
-    /* 1. RESET */
+    :root {
+        --bg-color: #fdfdfd;
+        --text-color: #2a2a2a;
+        --img-opacity: 1.0;
+    }
+    
+    /* DARK MODE CLASS */
+    body.dark-mode {
+        --bg-color: #1a1a1a;
+        --text-color: #e0e0e0;
+        --img-opacity: 0.85; /* Slightly dim images in dark mode */
+    }
+
     html, body {
         margin: 0 !important;
         padding: 0 !important;
         width: 100vw !important;
         height: 100vh !important;
         overflow: hidden !important;
-        background-color: #fdfdfd;
+        background-color: var(--bg-color); /* USE VAR */
+        transition: background-color 0.3s ease, color 0.3s ease;
     }
 
-    /* 2. CONTAINER */
     #book-content {
         height: 100vh !important;
         width: 100vw !important;
-        
-        /* SCROLLING */
         overflow-x: scroll; 
         overflow-y: hidden;
-        
-        /* COLUMN MATH: 
-           By removing horizontal padding here, 
-           Column Width becomes exactly 100vw.
-        */
-        padding: 60px 0; /* Top/Bottom only */
+        padding: 60px 0;
         box-sizing: border-box;
 
         column-width: 100vw;
-        column-gap: 80px; /* Clean 80px gap */
+        column-gap: 80px;
         column-fill: auto;
         
-        /* TEXT */
         font-family: "Georgia", "Cambria", serif;
         font-size: 20px;
         line-height: 1.6;
-        color: #2a2a2a;
+        color: var(--text-color); /* USE VAR */
         text-align: justify;
     }
     
     #book-content::-webkit-scrollbar { display: none; }
 
-    /* 3. CENTERED TEXT BLOCKS */
-    /* We create the 'margins' here using max-width */
     p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre {
-        /* The cozy reading width */
-        width: 700px; 
-        
-        /* Safety for small screens (mobiles/resizing) */
+        width: 700px;
         max-width: calc(100vw - 80px);
-        
-        /* Center the block inside the 100vw column */
         margin-left: auto;
         margin-right: auto;
-        
         margin-bottom: 1.2em;
     }
     
     h1, h2, h3 { 
-        margin-top: 1em; 
-        margin-bottom: 0.6em; 
-        break-after: avoid; 
-        text-align: center;
+        margin-top: 1em; margin-bottom: 0.6em; 
+        break-after: avoid; text-align: center;
     }
     
     img {
-        max-width: calc(100vw - 80px); /* Ensure image fits */
+        max-width: calc(100vw - 80px);
         max-height: 85vh; 
         display: block;
         margin: 20px auto;
         break-inside: avoid;
+        opacity: var(--img-opacity);
     }
 </style>
 """
@@ -106,7 +103,7 @@ def prepare_chapter_html(raw_html, temp_img_dir):
     new_soup = BeautifulSoup("<html><head></head><body><div id='book-content'></div></body></html>", 'xml')
     
     style_tag = new_soup.new_tag("style")
-    style_tag.string = PAGED_CSS.replace("<style>", "").replace("</style>", "")
+    style_tag.string = THEME_CSS.replace("<style>", "").replace("</style>", "")
     new_soup.head.append(style_tag)
     
     content_children = [copy.copy(c) for c in body_content.children]
