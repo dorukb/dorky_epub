@@ -1,51 +1,79 @@
 import os
+import copy
 from bs4 import BeautifulSoup
 from PyQt6.QtCore import QUrl
 
-# PREMIUM PAGE STYLE
-COZY_CSS = """
+PAGED_CSS = """
 <style>
-    body {
-        font-family: "Georgia", "Cambria", serif;
-        font-size: 21px;
-        line-height: 1.8;
-        color: #222;            /* Darker gray for better contrast */
+    /* 1. RESET */
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        overflow: hidden !important;
         background-color: #fdfdfd;
+    }
+
+    /* 2. CONTAINER */
+    #book-content {
+        height: 100vh !important;
+        width: 100vw !important;
         
-        max-width: 900px;
-        margin: 0 auto;
-        
-        /* HUGE VERTICAL PADDING 
-           This creates the "Head" and "Foot" of the page 
-        */
-        padding: 80px 10%;
-        
+        /* SCROLLING */
+        overflow-x: scroll; 
         overflow-y: hidden;
+        
+        /* COLUMN MATH: 
+           By removing horizontal padding here, 
+           Column Width becomes exactly 100vw.
+        */
+        padding: 60px 0; /* Top/Bottom only */
+        box-sizing: border-box;
+
+        column-width: 100vw;
+        column-gap: 80px; /* Clean 80px gap */
+        column-fill: auto;
+        
+        /* TEXT */
+        font-family: "Georgia", "Cambria", serif;
+        font-size: 20px;
+        line-height: 1.6;
+        color: #2a2a2a;
+        text-align: justify;
     }
     
-    body::-webkit-scrollbar {
-        display: none;
-    }
+    #book-content::-webkit-scrollbar { display: none; }
 
-    p {
-        margin-bottom: 1.5em;
-        text-align: justify;
-        text-justify: inter-word;
+    /* 3. CENTERED TEXT BLOCKS */
+    /* We create the 'margins' here using max-width */
+    p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre {
+        /* The cozy reading width */
+        width: 700px; 
+        
+        /* Safety for small screens (mobiles/resizing) */
+        max-width: calc(100vw - 80px);
+        
+        /* Center the block inside the 100vw column */
+        margin-left: auto;
+        margin-right: auto;
+        
+        margin-bottom: 1.2em;
     }
-
-    h1, h2, h3 {
-        font-family: "Helvetica Neue", sans-serif;
-        color: #111;
-        margin-top: 1.5em;
-        margin-bottom: 1.0em;
+    
+    h1, h2, h3 { 
+        margin-top: 1em; 
+        margin-bottom: 0.6em; 
+        break-after: avoid; 
+        text-align: center;
     }
-
+    
     img {
-        max-width: 100%;
-        height: auto;
+        max-width: calc(100vw - 80px); /* Ensure image fits */
+        max-height: 85vh; 
         display: block;
-        margin: 30px auto;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        margin: 20px auto;
+        break-inside: avoid;
     }
 </style>
 """
@@ -61,21 +89,28 @@ def extract_images_and_fix_html(book, temp_dir):
                 f.write(item.get_content())
     return temp_dir
 
-def prepare_html(html_content, temp_img_dir):
-    soup = BeautifulSoup(html_content, 'xml') 
+def prepare_chapter_html(raw_html, temp_img_dir):
+    soup = BeautifulSoup(raw_html, 'html.parser')
     
-    if not soup.head:
-        head_tag = soup.new_tag("head")
-        soup.html.insert(0, head_tag)
-    
-    style_tag = BeautifulSoup(COZY_CSS, 'html.parser')
-    soup.head.append(style_tag)
-
-    for img in soup.find_all('img'):
+    body_content = soup.body
+    if not body_content:
+        body_content = soup
+        
+    for img in body_content.find_all('img'):
         src = img.get('src')
         if src:
-            filename = os.path.basename(src)
-            local_path = os.path.join(temp_img_dir, filename)
-            img['src'] = QUrl.fromLocalFile(local_path).toString()
+            fname = os.path.basename(src)
+            local = os.path.join(temp_img_dir, fname)
+            img['src'] = QUrl.fromLocalFile(local).toString()
 
-    return str(soup)
+    new_soup = BeautifulSoup("<html><head></head><body><div id='book-content'></div></body></html>", 'xml')
+    
+    style_tag = new_soup.new_tag("style")
+    style_tag.string = PAGED_CSS.replace("<style>", "").replace("</style>", "")
+    new_soup.head.append(style_tag)
+    
+    content_children = [copy.copy(c) for c in body_content.children]
+    for child in content_children:
+        new_soup.find(id="book-content").append(child)
+        
+    return str(new_soup)
